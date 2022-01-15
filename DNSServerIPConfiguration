@@ -1,0 +1,51 @@
+Function Export-DNSServerIPConfiguration {
+param($Domain)
+
+    # Get the DNS configuration of each child DC
+    $DNSReport = @()
+
+    ForEach ($DomainEach in $Domain) {
+        # Get a list of DCs without using AD Web Service
+        $DCs = netdom query /domain:$DomainEach dc |
+            Where-Object {$_ -notlike "*accounts*" -and $_ -notlike "*completed*" -and $_}
+
+        ForEach ($dc in $DCs) {
+
+            # Forwarders
+            $dnsFwd = Get-WMIObject -ComputerName $("$dc.$DomainEach") `
+                -Namespace root\MicrosoftDNS -Class MicrosoftDNS_Server `
+                -ErrorAction SilentlyContinue
+
+            # Primary/Secondary (Self/Partner)
+            # http://msdn.microsoft.com/en-us/library/windows/desktop/aa393295(v=vs.85).aspx
+            $nic = Get-WMIObject -ComputerName $("$dc.$DomainEach") -Query `
+                "Select * From Win32_NetworkAdapterConfiguration Where IPEnabled=TRUE" `
+                -ErrorAction SilentlyContinue
+
+            $DNSReport += 1 | Select-Object `
+                @{name="DC";expression={$dc}}, `
+                @{name="Domain";expression={$DomainEach}}, `
+                @{name="DNSHostName";expression={$nic.DNSHostName}}, `
+                @{name="IPAddress";expression={$nic.IPAddress}}, `
+                @{name="DNSServerAddresses";expression={$dnsFwd.ServerAddresses}}, `
+                @{name="DNSServerSearchOrder";expression={$nic.DNSServerSearchOrder}}, `
+                @{name="Forwarders";expression={$dnsFwd.Forwarders}}, `
+                @{name="BootMethod";expression={$dnsFwd.BootMethod}}, `
+                @{name="ScavengingInterval";expression={$dnsFwd.ScavengingInterval}}
+
+        } # End ForEach
+
+    }
+
+    $DNSReport | Format-Table -AutoSize -Wrap
+    $DNSReport | Export-CSV ".\DC_DNS_IP_Report_$(Get-Date -UFormat %Y%m%d%H%M%S).csv" -NoTypeInformation
+
+    "Report file:"
+    Get-ChildItem "DC_DNS_IP_Report_*.csv"
+}
+
+# Enumerate all DCs in each domain supplied
+# For each DC collect all relevant DNS server and client IP configuration information
+# Uses NETDOM to query a list of domain controllers in case you are targeting a legacy environment
+#
+# Export-DNSServerIPConfiguration -Domain 'contoso.com','na.contoso.com','eu.contoso.com'
